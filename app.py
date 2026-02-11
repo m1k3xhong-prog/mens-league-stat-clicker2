@@ -1,16 +1,12 @@
 # streamlit_app.py
-# Basketball Stat Clicker (All Players Visible)
-# - Each player always shown with their own stat buttons (no player selection)
-# - Stats update instantly
-# - Global Undo
-# - CSV export
-# - Import roster.csv with header: name
-#
-# Works on Python 3.8+ (avoids `str | None` type syntax)
+# Basketball Stat Clicker — All Players Visible (Auto-load roster.csv)
+# Python 3.8+ compatible
+
+import os
+from typing import Dict, List, Tuple
 
 import pandas as pd
 import streamlit as st
-from typing import Optional, List, Dict, Tuple
 
 st.set_page_config(page_title="Basketball Stat Clicker", layout="wide")
 
@@ -31,6 +27,10 @@ BUTTONS = [
     ("TOV",     "TOV", 1, None),
 ]
 
+
+# -----------------------
+# State + helpers
+# -----------------------
 def ensure_state() -> None:
     if "roster" not in st.session_state:
         # roster = list of {"name": str, "stats": dict[str,int]}
@@ -39,18 +39,22 @@ def ensure_state() -> None:
         # action_stack = list of (player_index, [(stat_key, delta), ...])
         st.session_state.action_stack = []
 
+
 def blank_stats() -> Dict[str, int]:
     # everything except PTS is stored; PTS is computed
     return {k: 0 for k in EXPORT_COLUMNS if k != "PTS"}
 
+
 def points(stats: Dict[str, int]) -> int:
     return 2 * stats.get("2PM", 0) + 3 * stats.get("3PM", 0)
+
 
 def apply_change(player_idx: int, changes: List[Tuple[str, int]]) -> None:
     p = st.session_state.roster[player_idx]
     for key, delta in changes:
         p["stats"][key] = max(0, int(p["stats"].get(key, 0)) + int(delta))
     st.session_state.action_stack.append((player_idx, changes))
+
 
 def undo_last() -> None:
     if not st.session_state.action_stack:
@@ -64,6 +68,7 @@ def undo_last() -> None:
     p = st.session_state.roster[idx]
     for key, delta in changes:
         p["stats"][key] = max(0, int(p["stats"].get(key, 0)) - int(delta))
+
 
 def build_df() -> pd.DataFrame:
     rows = []
@@ -93,8 +98,8 @@ def build_df() -> pd.DataFrame:
 
     return df
 
-def import_roster_from_csv(file) -> None:
-    df_in = pd.read_csv(file)
+
+def import_roster_from_df(df_in: pd.DataFrame) -> None:
     cols = [c.lower().strip() for c in df_in.columns]
     if "name" not in cols:
         st.error("CSV must include a 'name' column (header should be exactly: name).")
@@ -112,35 +117,36 @@ def import_roster_from_csv(file) -> None:
     st.success(f"Imported {len(roster)} players.")
     st.rerun()
 
+
 # -----------------------
-# App
+# App start
 # -----------------------
 ensure_state()
 
-import os
-
-# Auto-load roster.csv once on startup (if present in the repo)
+# ✅ Auto-load roster.csv ONCE if it exists in the repo
 if "roster_loaded" not in st.session_state:
     st.session_state.roster_loaded = True
     if (not st.session_state.roster) and os.path.exists("roster.csv"):
         try:
-            df_in = pd.read_csv("roster.csv")
-            cols = [c.lower().strip() for c in df_in.columns]
+            df_auto = pd.read_csv("roster.csv")
+            cols = [c.lower().strip() for c in df_auto.columns]
             if "name" in cols:
-                name_col = df_in.columns[cols.index("name")]
-                roster = []
-                for _, r in df_in.iterrows():
+                name_col = df_auto.columns[cols.index("name")]
+                auto_roster = []
+                for _, r in df_auto.iterrows():
                     nm = str(r.get(name_col, "")).strip()
                     if nm:
-                        roster.append({"name": nm, "stats": blank_stats()})
-                st.session_state.roster = roster
-                st.session_state.action_stack = []
+                        auto_roster.append({"name": nm, "stats": blank_stats()})
+                st.session_state.roster = auto_roster
         except Exception:
+            # don't crash the app if roster.csv is malformed
             pass
 
 st.title("🏀 Basketball Stat Clicker (Streamlit) — All Players")
 
+# -----------------------
 # Sidebar controls
+# -----------------------
 with st.sidebar:
     st.header("Roster")
 
@@ -160,7 +166,8 @@ with st.sidebar:
         up = st.file_uploader("Upload roster CSV", type=["csv"])
         if up is not None:
             try:
-                import_roster_from_csv(up)
+                df_in = pd.read_csv(up)
+                import_roster_from_df(df_in)
             except Exception as e:
                 st.error(f"Could not import CSV: {e}")
 
@@ -176,7 +183,9 @@ with st.sidebar:
             st.session_state.action_stack = []
             st.rerun()
 
+# -----------------------
 # Top controls
+# -----------------------
 c1, c2 = st.columns([1, 2], gap="large")
 
 with c1:
@@ -197,23 +206,22 @@ with c2:
 
 st.divider()
 
+# -----------------------
+# Player panels
+# -----------------------
 if not st.session_state.roster:
-    st.info("Add players in the sidebar or upload roster.csv to begin.")
+    st.info("Add players in the sidebar or include roster.csv in the repo to auto-load.")
 else:
     st.subheader("Players")
 
-    # Responsive-ish layout: choose columns count
-    # 2 columns is safer on mobile; switch to 3 on wider screens manually if you want
-    per_row = 2
+    per_row = 2  # change to 3 if you want more compact on desktop
     cols = st.columns(per_row, gap="large")
 
     for i, p in enumerate(st.session_state.roster):
         with cols[i % per_row]:
             st.markdown(f"### {p['name']}")
             s = p["stats"]
-            st.caption(
-                f"PTS: **{points(s)}**  •  REB: **{s.get('REB',0)}**  •  AST: **{s.get('AST',0)}**"
-            )
+            st.caption(f"PTS: **{points(s)}**  •  REB: **{s.get('REB',0)}**  •  AST: **{s.get('AST',0)}**")
 
             # Button grid: 3 columns of stat buttons per player
             bcols = st.columns(3)
@@ -227,7 +235,6 @@ else:
                         apply_change(i, changes)
                         st.rerun()
 
-            # Remove player
             if st.button("Remove player", key=f"rm_{i}", use_container_width=True):
                 st.session_state.roster.pop(i)
                 st.session_state.action_stack = []
