@@ -1,13 +1,24 @@
-# app.py  (or streamlit_app.py)
-import io
+# streamlit_app.py
+# Basketball Stat Clicker (All Players Visible)
+# - Each player always shown with their own stat buttons (no player selection)
+# - Stats update instantly
+# - Global Undo
+# - CSV export
+# - Import roster.csv with header: name
+#
+# Works on Python 3.8+ (avoids `str | None` type syntax)
+
 import pandas as pd
 import streamlit as st
+from typing import Optional, List, Dict, Tuple
 
 st.set_page_config(page_title="Basketball Stat Clicker", layout="wide")
 
+# Box score columns requested
 EXPORT_COLUMNS = ["PTS", "REB", "AST", "2PM", "2PA", "3PM", "3PA", "STL", "BLK", "TOV"]
 
-# Buttons: (label, stat_key, delta, implies_attempt_key or None)
+# Buttons per player:
+# label, stat_key, delta, implies_attempt_key (make implies attempt)
 BUTTONS = [
     ("2PM",     "2PM", 1, "2PA"),
     ("2P Miss", "2PA", 1, None),
@@ -20,37 +31,41 @@ BUTTONS = [
     ("TOV",     "TOV", 1, None),
 ]
 
-def ensure_state():
+def ensure_state() -> None:
     if "roster" not in st.session_state:
-        st.session_state.roster = []  # list[{name, stats}]
+        # roster = list of {"name": str, "stats": dict[str,int]}
+        st.session_state.roster = []
     if "action_stack" not in st.session_state:
-        # list of (player_index, [(stat_key, delta), ...])
+        # action_stack = list of (player_index, [(stat_key, delta), ...])
         st.session_state.action_stack = []
 
-def blank_stats():
+def blank_stats() -> Dict[str, int]:
+    # everything except PTS is stored; PTS is computed
     return {k: 0 for k in EXPORT_COLUMNS if k != "PTS"}
 
-def points(stats: dict) -> int:
+def points(stats: Dict[str, int]) -> int:
     return 2 * stats.get("2PM", 0) + 3 * stats.get("3PM", 0)
 
-def apply_change(player_idx: int, changes):
+def apply_change(player_idx: int, changes: List[Tuple[str, int]]) -> None:
     p = st.session_state.roster[player_idx]
     for key, delta in changes:
-        p["stats"][key] = max(0, p["stats"].get(key, 0) + delta)
+        p["stats"][key] = max(0, int(p["stats"].get(key, 0)) + int(delta))
     st.session_state.action_stack.append((player_idx, changes))
 
-def undo_last():
+def undo_last() -> None:
     if not st.session_state.action_stack:
         st.toast("Nothing to undo.", icon="ℹ️")
         return
+
     idx, changes = st.session_state.action_stack.pop()
     if idx < 0 or idx >= len(st.session_state.roster):
         return
+
     p = st.session_state.roster[idx]
     for key, delta in changes:
-        p["stats"][key] = max(0, p["stats"].get(key, 0) - delta)
+        p["stats"][key] = max(0, int(p["stats"].get(key, 0)) - int(delta))
 
-def build_df():
+def build_df() -> pd.DataFrame:
     rows = []
     for p in st.session_state.roster:
         s = p["stats"]
@@ -78,24 +93,44 @@ def build_df():
 
     return df
 
+def import_roster_from_csv(file) -> None:
+    df_in = pd.read_csv(file)
+    cols = [c.lower().strip() for c in df_in.columns]
+    if "name" not in cols:
+        st.error("CSV must include a 'name' column (header should be exactly: name).")
+        return
+
+    name_col = df_in.columns[cols.index("name")]
+    roster = []
+    for _, r in df_in.iterrows():
+        nm = str(r.get(name_col, "")).strip()
+        if nm:
+            roster.append({"name": nm, "stats": blank_stats()})
+
+    st.session_state.roster = roster
+    st.session_state.action_stack = []
+    st.success(f"Imported {len(roster)} players.")
+    st.rerun()
+
+# -----------------------
+# App
+# -----------------------
 ensure_state()
 
-st.title("🏀 Basketball Stat Clicker (All Players)")
+st.title("🏀 Basketball Stat Clicker (Streamlit) — All Players")
 
-# -------------------------
-# Sidebar: roster management
-# -------------------------
+# Sidebar controls
 with st.sidebar:
     st.header("Roster")
 
     with st.expander("Add player", expanded=True):
         new_name = st.text_input("Player name", key="add_name")
         if st.button("Add to roster", use_container_width=True):
-            name = (new_name or "").strip()
-            if not name:
+            nm = (new_name or "").strip()
+            if not nm:
                 st.error("Please enter a player name.")
             else:
-                st.session_state.roster.append({"name": name, "stats": blank_stats()})
+                st.session_state.roster.append({"name": nm, "stats": blank_stats()})
                 st.session_state.add_name = ""
                 st.rerun()
 
@@ -104,49 +139,32 @@ with st.sidebar:
         up = st.file_uploader("Upload roster CSV", type=["csv"])
         if up is not None:
             try:
-                df_in = pd.read_csv(up)
-                cols = [c.lower().strip() for c in df_in.columns]
-                if "name" not in cols:
-                    st.error("CSV must include a 'name' column.")
-                else:
-                    name_col = df_in.columns[cols.index("name")]
-                    roster = []
-                    for _, r in df_in.iterrows():
-                        nm = str(r.get(name_col, "")).strip()
-                        if nm:
-                            roster.append({"name": nm, "stats": blank_stats()})
-                    st.session_state.roster = roster
-                    st.session_state.action_stack = []
-                    st.success(f"Imported {len(roster)} players.")
-                    st.rerun()
+                import_roster_from_csv(up)
             except Exception as e:
                 st.error(f"Could not import CSV: {e}")
 
     with st.expander("Roster actions", expanded=False):
-        if st.button("Reset all stats", use_container_width=True):
+        if st.button("Reset all stats", use_container_width=True, disabled=(len(st.session_state.roster) == 0)):
             for p in st.session_state.roster:
                 p["stats"] = blank_stats()
             st.session_state.action_stack = []
             st.rerun()
 
-        if st.button("Clear roster", use_container_width=True):
+        if st.button("Clear roster", use_container_width=True, disabled=(len(st.session_state.roster) == 0)):
             st.session_state.roster = []
             st.session_state.action_stack = []
             st.rerun()
 
-# -------------------------
 # Top controls
-# -------------------------
-top_left, top_right = st.columns([1, 2], gap="large")
+c1, c2 = st.columns([1, 2], gap="large")
 
-with top_left:
+with c1:
     if st.button("Undo last action", use_container_width=True, disabled=(len(st.session_state.roster) == 0)):
         undo_last()
         st.rerun()
 
-with top_right:
-    df_now = build_df()
-    csv_bytes = df_now.to_csv(index=False).encode("utf-8")
+with c2:
+    csv_bytes = build_df().to_csv(index=False).encode("utf-8")
     st.download_button(
         "Download stats CSV",
         data=csv_bytes,
@@ -158,15 +176,13 @@ with top_right:
 
 st.divider()
 
-# -------------------------
-# Player panels with dedicated buttons
-# -------------------------
 if not st.session_state.roster:
     st.info("Add players in the sidebar or upload roster.csv to begin.")
 else:
     st.subheader("Players")
 
-    # layout: 2 or 3 columns depending on screen
+    # Responsive-ish layout: choose columns count
+    # 2 columns is safer on mobile; switch to 3 on wider screens manually if you want
     per_row = 2
     cols = st.columns(per_row, gap="large")
 
@@ -174,13 +190,14 @@ else:
         with cols[i % per_row]:
             st.markdown(f"### {p['name']}")
             s = p["stats"]
-            st.caption(f"PTS: **{points(s)}**  •  REB: **{s.get('REB',0)}**  •  AST: **{s.get('AST',0)}**")
+            st.caption(
+                f"PTS: **{points(s)}**  •  REB: **{s.get('REB',0)}**  •  AST: **{s.get('AST',0)}**"
+            )
 
-            # 3 columns of stat buttons per player
+            # Button grid: 3 columns of stat buttons per player
             bcols = st.columns(3)
             for bi, (label, key, delta, implies) in enumerate(BUTTONS):
                 with bcols[bi % 3]:
-                    # unique key per player+button
                     btn_key = f"btn_{i}_{key}_{label}"
                     if st.button(label, key=btn_key, use_container_width=True):
                         changes = [(key, delta)]
@@ -189,13 +206,12 @@ else:
                         apply_change(i, changes)
                         st.rerun()
 
-            # Small remove player
+            # Remove player
             if st.button("Remove player", key=f"rm_{i}", use_container_width=True):
                 st.session_state.roster.pop(i)
                 st.session_state.action_stack = []
                 st.rerun()
 
     st.divider()
-
     st.subheader("Box score")
     st.dataframe(build_df(), use_container_width=True, hide_index=True)
