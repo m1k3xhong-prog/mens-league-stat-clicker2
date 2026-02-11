@@ -117,6 +117,27 @@ def import_roster_from_csv(file) -> None:
 # -----------------------
 ensure_state()
 
+import os
+
+# Auto-load roster.csv once on startup (if present in the repo)
+if "roster_loaded" not in st.session_state:
+    st.session_state.roster_loaded = True
+    if (not st.session_state.roster) and os.path.exists("roster.csv"):
+        try:
+            df_in = pd.read_csv("roster.csv")
+            cols = [c.lower().strip() for c in df_in.columns]
+            if "name" in cols:
+                name_col = df_in.columns[cols.index("name")]
+                roster = []
+                for _, r in df_in.iterrows():
+                    nm = str(r.get(name_col, "")).strip()
+                    if nm:
+                        roster.append({"name": nm, "stats": blank_stats()})
+                st.session_state.roster = roster
+                st.session_state.action_stack = []
+        except Exception:
+            pass
+
 st.title("🏀 Basketball Stat Clicker (Streamlit) — All Players")
 
 # Sidebar controls
